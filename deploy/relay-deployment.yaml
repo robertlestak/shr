@@ -1,0 +1,54 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shr-relay
+  labels:
+    app: shr-relay
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: shr-relay
+  template:
+    metadata:
+      labels:
+        app: shr-relay
+    spec:
+      containers:
+      - name: shr-relay
+        image: registry.lestak.sh/shr:latest
+        imagePullPolicy: Always
+        args:
+        - -relay
+        - -addr
+        - "0.0.0.0"
+        - -log-level
+        - "debug"
+        - -relay-key
+        - "$(RELAY_KEY)"
+        - -port
+        - "80"
+        ports:
+          - containerPort: 80
+            name: http
+          - containerPort: 443
+            name: https
+        envFrom:
+          - secretRef:
+              name: shr-relay
+        livenessProbe:
+          httpGet:
+            port: 80
+            path: /_shr/healthz
+        readinessProbe:
+          httpGet:
+            port: 80
+            path: /_shr/healthz
+        resources:
+          requests:
+            cpu: 100m
+            memory: 100Mi
+          limits:
+            cpu: 2000m
+            memory: 2Gi

@@ -1,0 +1,20 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: shr-relay
+  labels:
+    app: shr-relay
+spec:
+  type: ClusterIP
+  selector:
+    app: shr-relay
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+      name: http
+    - protocol: TCP
+      port: 443
+      targetPort: 443
+      name: https
