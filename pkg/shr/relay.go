@@ -1,6 +1,7 @@
 package shr
 
 import (
+	"bytes"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -56,7 +57,7 @@ func (s *Shr) registerRelay(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if s.RelayAuthKey != nil && shr.RelayAuthKey != nil && *s.RelayAuthKey != *shr.RelayAuthKey {
+	if s.Relay.AuthKey != nil && shr.Relay.AuthKey != nil && *s.Relay.AuthKey != *shr.Relay.AuthKey {
 		l.Error("shr relay request failed")
 		http.Error(w, "invalid relay key", http.StatusUnauthorized)
 		return
@@ -77,7 +78,7 @@ func (s *Shr) registerRelay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	k := uuid.New().String()
-	shr.RelayKey = &k
+	shr.Relay.Key = &k
 	if _, ok := Relays[*shr.ID]; ok {
 		l.Error("shr already registered")
 		http.Error(w, "shr already registered", http.StatusBadRequest)
@@ -128,7 +129,7 @@ func (s *Shr) unregisterRelay(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "shr not found", http.StatusNotFound)
 		return
 	}
-	if shr.RelayKey == nil || *shr.RelayKey != key {
+	if shr.Relay.Key == nil || *shr.Relay.Key != key {
 		l.Error("shr relay request failed")
 		http.Error(w, "invalid relay key", http.StatusUnauthorized)
 		return
@@ -145,7 +146,7 @@ func (s *Shr) registerWithRelay() error {
 		"func": "registerWithRelay",
 	})
 	l.Debug("Registering with shr relay")
-	if s.RelayAddr == nil || *s.RelayAddr == "" {
+	if s.Relay.Addr == nil || *s.Relay.Addr == "" {
 		return errors.New("shr relay addr is required")
 	}
 	if s.ID == nil || *s.ID == "" {
@@ -165,12 +166,17 @@ func (s *Shr) registerWithRelay() error {
 		s.UnregisterWithRelay()
 		os.Exit(0)
 	}()
+	rc := &RelayConfig{
+		AuthKey: s.Relay.AuthKey,
+		Addr:    s.Relay.Addr,
+		Key:     s.Relay.Key,
+	}
 	shr := &Shr{
-		ID:           s.ID,
-		Advertise:    s.Advertise,
-		Port:         s.Port,
-		TLS:          s.TLS,
-		RelayAuthKey: s.RelayAuthKey,
+		ID:        s.ID,
+		Advertise: s.Advertise,
+		Port:      s.Port,
+		TLS:       s.TLS,
+		Relay:     rc,
 	}
 	l.WithFields(log.Fields{
 		"adv": *shr.Advertise,
@@ -204,8 +210,20 @@ func (s *Shr) registerWithRelay() error {
 			TLSClientConfig: tlsConfig,
 		}
 	}
-	u := fmt.Sprintf("%s/_shr/register", *s.RelayAddr)
-	resp, err := c.Post(u, "application/json", strings.NewReader(string(shrJson)))
+	u := fmt.Sprintf("%s/_shr/register", *s.Relay.Addr)
+	l.WithFields(log.Fields{
+		"url":    u,
+		"method": http.MethodPost,
+	}).Debug("Registering with shr relay")
+	req, err := http.NewRequest(http.MethodPost, u, bytes.NewBuffer(shrJson))
+	if err != nil {
+		l.WithFields(log.Fields{
+			"err": err,
+		}).Error("shr relay registration failed")
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.Do(req)
 	if err != nil {
 		l.WithFields(log.Fields{
 			"err": err,
@@ -229,11 +247,11 @@ func (s *Shr) registerWithRelay() error {
 		return errors.New("shr relay registration failed")
 	}
 	k := string(body)
-	s.RelayKey = &k
+	s.Relay.Key = &k
 	l.WithFields(log.Fields{
-		"relayKey": *s.RelayKey,
+		"relayKey": *s.Relay.Key,
 	}).Debug("shr relay registration succeeded")
-	fmt.Printf("shr relay started: %s/%s/\n", *s.RelayAddr, *s.ID)
+	fmt.Printf("shr relay started: %s/%s/\n", *s.Relay.Addr, *s.ID)
 	return nil
 }
 
@@ -242,13 +260,13 @@ func (s *Shr) UnregisterWithRelay() error {
 		"func": "UnregisterWithRelay",
 	})
 	l.Debug("Unregistering with shr relay")
-	if s.RelayAddr == nil || *s.RelayAddr == "" {
+	if s.Relay.Addr == nil || *s.Relay.Addr == "" {
 		return errors.New("shr relay addr is required")
 	}
 	if s.ID == nil || *s.ID == "" {
 		return errors.New("shr id is required")
 	}
-	if s.RelayKey == nil || *s.RelayKey == "" {
+	if s.Relay.Key == nil || *s.Relay.Key == "" {
 		return errors.New("shr relay key is required")
 	}
 	c := &http.Client{}
@@ -276,7 +294,7 @@ func (s *Shr) UnregisterWithRelay() error {
 			TLSClientConfig: tlsConfig,
 		}
 	}
-	u := fmt.Sprintf("%s/_shr/unregister/%s/%s", *s.RelayAddr, *s.ID, *s.RelayKey)
+	u := fmt.Sprintf("%s/_shr/unregister/%s/%s", *s.Relay.Addr, *s.ID, *s.Relay.Key)
 	req, err := http.NewRequest(http.MethodDelete, u, nil)
 	if err != nil {
 		return err

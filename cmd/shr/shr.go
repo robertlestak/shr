@@ -76,14 +76,23 @@ func main() {
 		// set addr to default
 		addr = advertise
 	}
+	// strip trailing slash off relay addr
+	if relayAddr != nil && *relayAddr != "" {
+		if (*relayAddr)[len(*relayAddr)-1] == '/' {
+			*relayAddr = (*relayAddr)[:len(*relayAddr)-1]
+		}
+	}
+	rc := &shr.RelayConfig{
+		Addr:    relayAddr,
+		AuthKey: relayKey,
+	}
 	s := &shr.Shr{
-		ID:           id,
-		Addr:         addr,
-		Advertise:    advertise,
-		Port:         port,
-		RelayAddr:    relayAddr,
-		RelayAuthKey: relayKey,
-		TLS:          tc,
+		ID:        id,
+		Addr:      addr,
+		Advertise: advertise,
+		Port:      port,
+		TLS:       tc,
+		Relay:     rc,
 	}
 	if *relayMode {
 		if err := s.StartRelay(); err != nil {

@@ -21,16 +21,20 @@ type TLSConfig struct {
 	Key  *string `yaml:"key" json:"key"`
 }
 
+type RelayConfig struct {
+	Addr    *string `yaml:"addr" json:"addr"`
+	AuthKey *string `yaml:"auth_key" json:"auth_key"`
+	Key     *string `yaml:"key" json:"key"`
+}
+
 type Shr struct {
-	ID           *string    `yaml:"id" json:"id"`
-	Path         *string    `yaml:"path" json:"path"`
-	Addr         *string    `yaml:"addr" json:"addr"`
-	Advertise    *string    `yaml:"advertise" json:"advertise"`
-	Port         *int       `yaml:"port" json:"port"`
-	TLS          *TLSConfig `yaml:"tls" json:"tls"`
-	RelayAddr    *string    `yaml:"relay" json:"relay"`
-	RelayAuthKey *string    `yaml:"relay_auth_key" json:"relay_auth_key"`
-	RelayKey     *string    `yaml:"-" json:"-"`
+	ID        *string      `yaml:"id" json:"id"`
+	Path      *string      `yaml:"path" json:"path"`
+	Addr      *string      `yaml:"addr" json:"addr"`
+	Advertise *string      `yaml:"advertise" json:"advertise"`
+	Port      *int         `yaml:"port" json:"port"`
+	TLS       *TLSConfig   `yaml:"tls" json:"tls"`
+	Relay     *RelayConfig `yaml:"relay" json:"relay"`
 }
 
 func newID() *string {
@@ -165,7 +169,7 @@ func (s *Shr) Start() error {
 			}
 		}()
 	}
-	if s.RelayAddr != nil && *s.RelayAddr != "" {
+	if s.Relay.Addr != nil && *s.Relay.Addr != "" {
 		go func() {
 			if err := s.registerWithRelay(); err != nil {
 				log.Fatal(err)
