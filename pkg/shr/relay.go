@@ -78,6 +78,11 @@ func (s *Shr) registerRelay(w http.ResponseWriter, r *http.Request) {
 	}
 	k := uuid.New().String()
 	shr.RelayKey = &k
+	if _, ok := Relays[*shr.ID]; ok {
+		l.Error("shr already registered")
+		http.Error(w, "shr already registered", http.StatusBadRequest)
+		return
+	}
 	Relays[*shr.ID] = &shr
 	l.WithFields(log.Fields{
 		"shr": shr,

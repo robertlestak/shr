@@ -156,6 +156,10 @@ $ wget \
     https://127.0.0.1:8080/39cdbaf0-a04f-4e27-94d7-5236f03402a5/
 ```
 
+### shr id
+
+Each `shr` is identified by a unique ID. If the `-id` flag is not specified, a random ID will be generated. The `shr` URL will be in the format: `http(s)://<addr>:<port>/<id>/`. Any user with a netpath to the `shr` instance and knowledge of the ID can access the service.
+
 ### Relay
 
 In `relay` mode, `shr` sits at the edge of a network and acts as a gateway / proxy for `shr` `client` instances within the network. At startup, `clients` register with the relay, and the relay will proxy requests to the `client` instance. When a `client` instance registers with the relay, it will be issued a unique key, which is used to deregister the `client` instance from the relay.
