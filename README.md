@@ -88,7 +88,7 @@ shr [options] <path>
   -id string
         shr ID
   -log-level string
-        Log level (default "debug")
+        Log level (default "info")
   -port int
         shr port (default 8080)
   -relay
@@ -174,11 +174,11 @@ Additionally, all PKI constructs apply to the `relay` as well. `relay-client` an
 
 ### Relay Socket Mode
 
-By default, the relay will communicate with the connected shr instances over "conventional" L4 TCP connections. This requires a stable netpath from the relay to the shr instance, such as a VPN or a direct connection. In some cases, this may not be possible, and the relay may need to traverse a NAT or firewall. In this case, the relay can be configured to use a "socket" mode, which will proxy requests over a websocket connection.
+By default, the relay will communicate with the connected shr instances over L4 TCP connections. This requires a stable netpath from the relay to the shr instance, such as a VPN or a direct connection. In some cases, this may not be possible, and the relay may need to traverse a NAT or firewall. In this case, the relay can be configured to use "socket" mode, which will proxy requests over a websocket connection.
 
-In relay mode, when the shr instance connects to the relay, it will open a long-running websocket connection to the relay over HTTP/HTTPS. When the relay receives requests for the shr instance, it will proxy the request over the websocket connection. This allows the relay to traverse NATs and firewalls, and allows the shr instance to be behind a NAT or firewall.
+In relay socket mode, when the shr instance connects to the relay, it will open a long-running websocket connection to the relay over HTTP/HTTPS. When the relay receives requests for the shr instance, it will proxy the request over the websocket connection. This allows the relay to traverse NATs and firewalls, and allows the shr instance to be behind a NAT or firewall.
 
-To enable socket mode, use the `-relay-socket` flag. This will cause the relay to open a websocket connection to the shr instance, and proxy requests over the websocket connection.
+To enable socket mode, use the `-relay-socket` flag along with the `-relay-addr` when connecting a `shr` node. This will cause the shr node to open a websocket connection to the relay. The relay will then proxy requests over this L7 websocket connection as opposed to the default L4 TCP connection.
 
 As socket mode requires a long-running websocket connection and is not as efficient as a direct TCP connection, it is recommended to use socket mode only when necessary.
 
