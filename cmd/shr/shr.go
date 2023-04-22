@@ -23,6 +23,11 @@ func init() {
 	log.SetLevel(ll)
 }
 
+func usage() {
+	usageText := `shr [options] <path>`
+	println(usageText)
+}
+
 func main() {
 	shrFlags := flag.NewFlagSet("shr", flag.ExitOnError)
 	logLevel := shrFlags.String("log-level", log.GetLevel().String(), "Log level")
@@ -32,11 +37,17 @@ func main() {
 	tlsCA := shrFlags.String("tls-ca", "", "shr TLS CA")
 	tlsCert := shrFlags.String("tls-crt", "", "shr TLS certificate")
 	tlsKey := shrFlags.String("tls-key", "", "shr TLS key")
+	tlsClientAuth := shrFlags.Bool("tls-client-auth", true, "require TLS client auth")
 	id := shrFlags.String("id", "", "shr ID")
 	relayAddr := shrFlags.String("relay-addr", "", "shr relay address")
 	relayKey := shrFlags.String("relay-key", "", "shr relay key")
 	relayMode := shrFlags.Bool("relay", false, "shr relay mode")
+	relaySocketMode := shrFlags.Bool("relay-socket", false, "shr relay socket mode")
 	version := shrFlags.Bool("version", false, "shr version")
+	shrFlags.Usage = func() {
+		usage()
+		shrFlags.PrintDefaults()
+	}
 	shrFlags.Parse(os.Args[1:])
 	ll, err := log.ParseLevel(*logLevel)
 	if err != nil {
@@ -50,9 +61,10 @@ func main() {
 	var tc *shr.TLSConfig
 	if *tlsCA != "" || *tlsCert != "" || *tlsKey != "" {
 		tc = &shr.TLSConfig{
-			CA:   tlsCA,
-			Cert: tlsCert,
-			Key:  tlsKey,
+			CA:         tlsCA,
+			Cert:       tlsCert,
+			Key:        tlsKey,
+			ClientAuth: tlsClientAuth,
 		}
 	}
 	if advertise == nil || *advertise == "" {
@@ -83,8 +95,9 @@ func main() {
 		}
 	}
 	rc := &shr.RelayConfig{
-		Addr:    relayAddr,
-		AuthKey: relayKey,
+		Addr:       relayAddr,
+		AuthKey:    relayKey,
+		SocketMode: relaySocketMode,
 	}
 	s := &shr.Shr{
 		ID:        id,

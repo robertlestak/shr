@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
@@ -117,7 +118,7 @@ func (s *Shr) unregisterRelay(w http.ResponseWriter, r *http.Request) {
 	// /_shr/unregister/<shr-id>/<relay-key>
 	parts := strings.Split(r.URL.Path, "/")
 	if len(parts) != 5 {
-		l.Error("shr relay request failed")
+		l.Error("invalid url")
 		http.Error(w, "invalid url", http.StatusBadRequest)
 		return
 	}
@@ -125,12 +126,12 @@ func (s *Shr) unregisterRelay(w http.ResponseWriter, r *http.Request) {
 	key := parts[4]
 	shr, ok := Relays[id]
 	if !ok {
-		l.Error("shr relay request failed")
+		l.Error("shr not found")
 		http.Error(w, "shr not found", http.StatusNotFound)
 		return
 	}
 	if shr.Relay.Key == nil || *shr.Relay.Key != key {
-		l.Error("shr relay request failed")
+		l.Error("invalid relay key")
 		http.Error(w, "invalid relay key", http.StatusUnauthorized)
 		return
 	}
@@ -160,16 +161,17 @@ func (s *Shr) registerWithRelay() error {
 	}
 	// trap exit and unregister with relay
 	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, os.Interrupt)
+	signal.Notify(ch, os.Interrupt, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
 	go func() {
 		<-ch
 		s.UnregisterWithRelay()
 		os.Exit(0)
 	}()
 	rc := &RelayConfig{
-		AuthKey: s.Relay.AuthKey,
-		Addr:    s.Relay.Addr,
-		Key:     s.Relay.Key,
+		AuthKey:    s.Relay.AuthKey,
+		Addr:       s.Relay.Addr,
+		Key:        s.Relay.Key,
+		SocketMode: s.Relay.SocketMode,
 	}
 	shr := &Shr{
 		ID:        s.ID,
@@ -303,7 +305,7 @@ func (s *Shr) UnregisterWithRelay() error {
 	if err != nil {
 		return err
 	}
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
 		return errors.New("shr relay unregistration failed")
 	}
 	defer resp.Body.Close()
@@ -313,7 +315,8 @@ func (s *Shr) UnregisterWithRelay() error {
 
 func (s *Shr) relayHandler(w http.ResponseWriter, r *http.Request) {
 	l := log.WithFields(log.Fields{
-		"func": "relayHandler",
+		"func":       "relayHandler",
+		"socketMode": s.Relay.SocketMode,
 	})
 	l.WithFields(log.Fields{
 		"method": r.Method,
@@ -322,9 +325,14 @@ func (s *Shr) relayHandler(w http.ResponseWriter, r *http.Request) {
 	// url will be in format:
 	// /<shr-id>/<path>
 	shrId := strings.Split(r.URL.Path, "/")[1]
-	if shr, ok := Relays[shrId]; ok {
+	if shrId == "" {
+		l.Debug("shr id not provided")
+		w.WriteHeader(http.StatusNoContent)
+		return
+	} else if shr, ok := Relays[shrId]; ok {
 		l.WithFields(log.Fields{
-			"shr": shr,
+			"shr":        shr,
+			"socketMode": *shr.Relay.SocketMode,
 		}).Debug("shr found")
 		if err := shr.RelayRequest(w, r); err != nil {
 			l.WithFields(log.Fields{
@@ -350,6 +358,7 @@ func (s *Shr) StartRelay() error {
 	http.HandleFunc("/_shr/healthz", s.healthcheckHandler)
 	http.HandleFunc("/_shr/register", s.registerRelay)
 	http.HandleFunc("/_shr/unregister/", s.unregisterRelay)
+	http.HandleFunc("/_shr/ws", s.relaySocketHandler)
 	http.HandleFunc("/", s.relayHandler)
 	if s.TLS != nil {
 		if s.TLS.CA == nil || *s.TLS.CA == "" {
@@ -372,8 +381,10 @@ func (s *Shr) StartRelay() error {
 		caCertPool := x509.NewCertPool()
 		caCertPool.AppendCertsFromPEM(caCert)
 		tlsConfig := &tls.Config{
-			ClientCAs:  caCertPool,
-			ClientAuth: tls.RequireAndVerifyClientCert,
+			ClientCAs: caCertPool,
+		}
+		if s.TLS.ClientAuth != nil && *s.TLS.ClientAuth {
+			tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
 		}
 		server := &http.Server{
 			Addr:      fmt.Sprintf("%s:%d", *s.Addr, *s.Port),

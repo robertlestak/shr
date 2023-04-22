@@ -51,4 +51,5 @@ spec:
             memory: 100Mi
           limits:
             cpu: 2000m
+             # if using relay-socket, this will need to be larger than the largest file you expect to transfer
             memory: 2Gi

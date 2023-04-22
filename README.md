@@ -80,31 +80,35 @@ If you need to share N or more files with N or more people without relying on a 
 ## Usage
 
 ```bash
-Usage of shr:
+shr [options] <path>
   -addr string
-    	shr address
+        shr address
   -advertise string
-    	shr advertise address
+        shr advertise address
   -id string
-    	shr ID
+        shr ID
   -log-level string
-    	Log level (default "debug")
+        Log level (default "debug")
   -port int
-    	shr port (default 8080)
+        shr port (default 8080)
   -relay
-    	shr relay mode
+        shr relay mode
   -relay-addr string
-    	shr relay address
+        shr relay address
   -relay-key string
-    	shr relay key
+        shr relay key
+  -relay-socket
+        shr relay socket mode
   -tls-ca string
-    	shr TLS CA
+        shr TLS CA
+  -tls-client-auth
+        require TLS client auth (default true)
   -tls-crt string
-    	shr TLS certificate
+        shr TLS certificate
   -tls-key string
-    	shr TLS key
+        shr TLS key
   -version
-    	shr version
+        shr version
 ```
 
 ## Building
@@ -125,7 +129,7 @@ $ make
 
 ### mTLS
 
-`shr` supports mTLS for client authentication. This means that the client must present a valid certificate signed by the CA in order to access the service. The CA certificate is specified using the `-tls-ca` flag. Clients with certificates issued by this CA must present a valid certificate signed by the CA in order to access the service.
+`shr` supports mTLS for client authentication. This means that the client must present a valid certificate signed by the CA in order to access the service. The CA certificate is specified using the `-tls-ca` flag. Clients with certificates issued by this CA must present a valid certificate signed by the CA in order to access the service. By default, client auth (mTLS) is enabled. This can be disabled using the `-tls-client-auth=false` flag.
 
 For example:
 
@@ -165,6 +169,18 @@ Each `shr` is identified by a unique ID. If the `-id` flag is not specified, a r
 In `relay` mode, `shr` sits at the edge of a network and acts as a gateway / proxy for `shr` `client` instances within the network. At startup, `clients` register with the relay, and the relay will proxy requests to the `client` instance. When a `client` instance registers with the relay, it will be issued a unique key, which is used to deregister the `client` instance from the relay.
 
 Optionally, `relays` can specify an additional `relay-key` which must be provided by client instances in order to register with the relay. This is useful for restricting access to the relay to only trusted clients. To this end, all `client-relay` communication is done on the `/_shr/*` routes, so you can also restrict these using your respective Service Mesh RBAC.
+
+Additionally, all PKI constructs apply to the `relay` as well. `relay-client` and `client-relay` communication is done over TLS, and the `relay` can be configured to require client authentication.
+
+### Relay Socket Mode
+
+By default, the relay will communicate with the connected shr instances over "conventional" L4 TCP connections. This requires a stable netpath from the relay to the shr instance, such as a VPN or a direct connection. In some cases, this may not be possible, and the relay may need to traverse a NAT or firewall. In this case, the relay can be configured to use a "socket" mode, which will proxy requests over a websocket connection.
+
+In relay mode, when the shr instance connects to the relay, it will open a long-running websocket connection to the relay over HTTP/HTTPS. When the relay receives requests for the shr instance, it will proxy the request over the websocket connection. This allows the relay to traverse NATs and firewalls, and allows the shr instance to be behind a NAT or firewall.
+
+To enable socket mode, use the `-relay-socket` flag. This will cause the relay to open a websocket connection to the shr instance, and proxy requests over the websocket connection.
+
+As socket mode requires a long-running websocket connection and is not as efficient as a direct TCP connection, it is recommended to use socket mode only when necessary.
 
 ## Examples
 
@@ -208,4 +224,17 @@ $ shr \
     -relay-key my-relay-key \
     /path/to/files
 ~ shr started with relay: http://1.2.3.4:8081/my-custom-id/
+```
+
+```bash
+$ shr \
+    -relay-addr https://relay.example.com \
+    -id my-custom-id \
+    -relay-key my-relay-key \
+    -relay-socket \
+    -tls-ca ca.crt \
+    -tls-crt client.crt \
+    -tls-key client.key \
+    /path/to/files
+~ shr started with relay: https://relay.example.com
 ```

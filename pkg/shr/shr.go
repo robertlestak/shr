@@ -1,6 +1,7 @@
 package shr
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -10,21 +11,25 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 	log "github.com/sirupsen/logrus"
 )
 
 type TLSConfig struct {
-	CA   *string `yaml:"ca" json:"ca"`
-	Cert *string `yaml:"cert" json:"cert"`
-	Key  *string `yaml:"key" json:"key"`
+	CA         *string `yaml:"ca" json:"ca"`
+	Cert       *string `yaml:"cert" json:"cert"`
+	Key        *string `yaml:"key" json:"key"`
+	ClientAuth *bool   `yaml:"client_auth" json:"client_auth"`
 }
 
 type RelayConfig struct {
-	Addr    *string `yaml:"addr" json:"addr"`
-	AuthKey *string `yaml:"auth_key" json:"auth_key"`
-	Key     *string `yaml:"key" json:"key"`
+	Addr       *string `yaml:"addr" json:"addr"`
+	SocketMode *bool   `yaml:"socket_mode" json:"socket_mode"`
+	AuthKey    *string `yaml:"auth_key" json:"auth_key"`
+	Key        *string `yaml:"key" json:"key"`
 }
 
 type Shr struct {
@@ -35,6 +40,8 @@ type Shr struct {
 	Port      *int         `yaml:"port" json:"port"`
 	TLS       *TLSConfig   `yaml:"tls" json:"tls"`
 	Relay     *RelayConfig `yaml:"relay" json:"relay"`
+
+	socketClient *websocket.Conn
 }
 
 func newID() *string {
@@ -73,7 +80,8 @@ func (s *Shr) handler(w http.ResponseWriter, r *http.Request) {
 			"method": r.Method,
 			"path":   r.URL.Path,
 		}).Debug("shr request not found")
-		http.NotFound(w, r)
+		// no content
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	// redirect /shr to /shr/
@@ -123,6 +131,7 @@ func (s *Shr) Start() error {
 		"id":   *s.ID,
 		"path": *s.Path,
 	}).Debug("shr started")
+	done := make(chan bool)
 	if s.TLS != nil {
 		if s.TLS.CA == nil || *s.TLS.CA == "" {
 			return errors.New("tls.ca is required")
@@ -144,8 +153,10 @@ func (s *Shr) Start() error {
 		caCertPool := x509.NewCertPool()
 		caCertPool.AppendCertsFromPEM(caCert)
 		tlsConfig := &tls.Config{
-			ClientCAs:  caCertPool,
-			ClientAuth: tls.RequireAndVerifyClientCert,
+			ClientCAs: caCertPool,
+		}
+		if s.TLS.ClientAuth != nil && *s.TLS.ClientAuth {
+			tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
 		}
 		server := &http.Server{
 			Addr:      fmt.Sprintf("%s:%d", *s.Addr, *s.Port),
@@ -156,6 +167,7 @@ func (s *Shr) Start() error {
 			if err := server.ListenAndServeTLS(*s.TLS.Cert, *s.TLS.Key); err != nil {
 				log.Fatal(err)
 			}
+			done <- true
 		}()
 	} else {
 		l.WithFields(log.Fields{
@@ -167,32 +179,30 @@ func (s *Shr) Start() error {
 			if err := http.ListenAndServe(fmt.Sprintf("%s:%d", *s.Addr, *s.Port), nil); err != nil {
 				log.Fatal(err)
 			}
+			done <- true
 		}()
 	}
 	if s.Relay.Addr != nil && *s.Relay.Addr != "" {
-		go func() {
-			if err := s.registerWithRelay(); err != nil {
-				log.Fatal(err)
-			}
-		}()
+		if err := s.registerWithRelay(); err != nil {
+			log.Fatal(err)
+		}
+		if s.Relay.SocketMode != nil && *s.Relay.SocketMode {
+			done := make(chan struct{})
+			go s.wsClient(done)
+			l.Debug("shr started with relay (socket mode)")
+			<-done
+			l.Debug("shr stopped with relay (socket mode)")
+		}
 	}
-	select {}
+	<-done
+	return nil
 }
 
-func (s *Shr) RelayRequest(w http.ResponseWriter, r *http.Request) error {
+func (s *Shr) httpProxy(w http.ResponseWriter, r *http.Request) error {
 	l := log.WithFields(log.Fields{
-		"func": "RelayRequest",
+		"func": "httpProxy",
 	})
-	l.WithFields(log.Fields{
-		"method": r.Method,
-		"path":   r.URL.Path,
-	}).Debug("shr relay request")
-	if s.Advertise == nil {
-		return errors.New("addr is required")
-	}
-	if s.Port == nil {
-		return errors.New("port is required")
-	}
+	l.Debug("shr http proxy")
 	// proxy request to shr
 	proto := "http"
 	if s.TLS != nil {
@@ -227,4 +237,116 @@ func (s *Shr) RelayRequest(w http.ResponseWriter, r *http.Request) error {
 	}
 	proxy.ServeHTTP(w, r)
 	return nil
+}
+
+func (s *Shr) wsProxy(w http.ResponseWriter, r *http.Request) error {
+	l := log.WithFields(log.Fields{
+		"func": "wsProxy",
+	})
+	l.Debug("shr ws proxy")
+	requestPath := r.URL.Path
+	requestId := r.Header.Get("X-Request-Id")
+	if requestId == "" {
+		requestId = uuid.New().String()
+	}
+	resp, contentType, err := s.requestThroughSocket(r.Context(), requestId, requestPath)
+	if err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Write(resp)
+	return nil
+}
+
+type socketRequest struct {
+	ID   string `json:"id"`
+	Path string `json:"path"`
+}
+
+type socketResponse struct {
+	ID          string `json:"id"`
+	Status      int    `json:"status"`
+	Body        []byte `json:"body"`
+	ContentType string `json:"content_type"`
+}
+
+func (s *Shr) getSocketResponse(ctx context.Context, id string) (socketResponse, error) {
+	l := log.WithFields(log.Fields{
+		"func": "getSocketResponse",
+		"id":   id,
+	})
+	l.Debug("shr get socket response")
+	// exit when context is done
+	var sr socketResponse
+	for {
+		select {
+		case <-ctx.Done():
+			return sr, ctx.Err()
+		default:
+		}
+		tsr, ok := socketResponses[id]
+		if ok {
+			sr = tsr
+			delete(socketResponses, id)
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return sr, nil
+}
+
+func (s *Shr) requestThroughSocket(ctx context.Context, requestId string, requestPath string) ([]byte, string, error) {
+	l := log.WithFields(log.Fields{
+		"func": "requestThroughSocket",
+	})
+	l.WithFields(log.Fields{
+		"path": requestPath,
+	}).Debug("shr request through proxy")
+	var contentType string
+	sr := socketRequest{
+		ID:   requestId,
+		Path: requestPath,
+	}
+	if err := s.writeSocketMessage("request:path", sr); err != nil {
+		l.WithFields(log.Fields{
+			"error": err,
+		}).Error("shr ws proxy write socket message")
+		return nil, contentType, err
+	}
+	sresp, err := s.getSocketResponse(ctx, requestId)
+	if err != nil {
+		l.WithFields(log.Fields{
+			"error": err,
+		}).Error("shr ws proxy get socket response")
+		return nil, contentType, err
+	}
+	if sresp.Status != 200 {
+		l.WithFields(log.Fields{
+			"status": sresp.Status,
+		}).Error("shr ws proxy get socket response status")
+		return nil, contentType, errors.New("error processing request")
+	}
+	return sresp.Body, sresp.ContentType, nil
+}
+
+func (s *Shr) RelayRequest(w http.ResponseWriter, r *http.Request) error {
+	l := log.WithFields(log.Fields{
+		"func": "RelayRequest",
+	})
+	l.WithFields(log.Fields{
+		"method":     r.Method,
+		"path":       r.URL.Path,
+		"socketMode": *s.Relay.SocketMode,
+	}).Debug("shr relay request")
+	if s.Advertise == nil {
+		return errors.New("addr is required")
+	}
+	if s.Port == nil {
+		return errors.New("port is required")
+	}
+	if s.Relay.SocketMode != nil && *s.Relay.SocketMode {
+		return s.wsProxy(w, r)
+	} else {
+		return s.httpProxy(w, r)
+	}
 }

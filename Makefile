@@ -1,7 +1,4 @@
-
- 
-
-VERSION=v0.0.1
+VERSION=v0.0.2
 
 bin: bin/shr_darwin bin/shr_linux bin/shr_windows
 
@@ -22,4 +19,4 @@ bin/shr_windows:
 
 .PHONY: docker
 docker:
-	docker build -t shr .
+	docker buildx build --build-arg VERSION=$(VERSION) --platform linux/amd64,linux/arm64 -t registry.lestak.sh/shr:latest --push .
